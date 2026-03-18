@@ -373,28 +373,47 @@ def _extract_transcript(raw: dict) -> Optional[str]:
     """
     提取原始转写内容（带时间戳）。
     来源：_original 字段（由 fetcher 注入）
+
+    Get笔记 _original API 真实字段结构：
+    {
+        "title": "...",
+        "content": "[00:00:00]转写文本...",   ← 主要转写字段（播客/语音类才有实质内容）
+        "asr_version": 0,
+        "has_optimized_asr": false,
+        "timeline_moments": null,
+        ...
+    }
+
+    注意：文章类笔记的 _original.content 只有标题，不是转写，需过滤。
     """
     original = raw.get("_original")
     if not original:
         return None
     if isinstance(original, str):
-        return original.strip()
+        return original.strip() if original.strip() else None
     if isinstance(original, dict):
-        # 常见格式：{ "text": "...", "segments": [...] }
-        if original.get("text"):
-            return original["text"].strip()
-        # 逐段拼接
+        # 优先：content 字段（Get笔记真实转写字段）
+        content = original.get("content")
+        if content and isinstance(content, str) and content.strip():
+            # 用时间戳标记判断是否为真正的转写内容（文章类只有标题，无时间戳）
+            if re.search(r'\[\d{2}:\d{2}:\d{2}\]', content):
+                return content.strip()
+        # 备选：text 字段
+        text = original.get("text")
+        if text and isinstance(text, str) and text.strip():
+            return text.strip()
+        # 备选：逐段拼接 segments / transcript
         segments = original.get("segments") or original.get("transcript") or []
         if segments:
             lines = []
             for seg in segments:
                 ts = seg.get("timestamp") or seg.get("start_time") or ""
-                text = seg.get("text") or seg.get("content") or ""
-                if ts and text:
-                    lines.append(f"`[{ts}]` {text}")
-                elif text:
-                    lines.append(text)
-            return "\n".join(lines)
+                seg_text = seg.get("text") or seg.get("content") or ""
+                if ts and seg_text:
+                    lines.append(f"`[{ts}]` {seg_text}")
+                elif seg_text:
+                    lines.append(seg_text)
+            return "\n".join(lines) if lines else None
     return None
 
 
