@@ -133,10 +133,10 @@ class ObsidianRenderer:
             sections.append(("🏷 重点章节", "🏷-重点章节"))
         if note.quotes:
             sections.append(("💬 金句摘录", "💬-金句摘录"))
+        if note.body_text:
+            sections.append(("📄 AI 笔记", "📄-ai-笔记"))
         if note.transcript:
-            sections.append(("📄 原文转写", "📄-原文转写"))
-        elif note.body_text:
-            sections.append(("📄 正文内容", "📄-正文内容"))
+            sections.append(("📃 原文转写", "📃-原文转写"))
 
         lines += _toc(sections)
 
@@ -156,10 +156,12 @@ class ObsidianRenderer:
             for q in note.quotes:
                 lines += [_quote_line(q), ""]
 
+        # body_text（AI 结构化笔记）和 transcript（原文转写）各自独立输出，互不覆盖
+        if note.body_text:
+            lines += ["", "## 📄 AI 笔记", "", note.body_text, ""]
+
         if note.transcript:
-            lines += ["", "## 📄 原文转写", "", note.transcript, ""]
-        elif note.body_text:
-            lines += ["", "## 📄 正文内容", "", note.body_text, ""]
+            lines += ["", "## 📃 原文转写", "", note.transcript, ""]
 
         return "\n".join(lines)
 
