@@ -213,8 +213,12 @@ def detect_note_type(
     src_name_lower = (src_name or "").lower()
     title_lower    = (raw.get("title") or "").lower()
 
-    # 1. 本地上传音频 → 播客
+    # 1. 本地上传音频 → 优先检查工作关键词，否则归入播客
     if api_note_type == "local_audio":
+        if tags_lower & _WORK_TAGS:
+            return NOTE_TYPE_WORK
+        if any(kw in title_lower for kw in _WORK_TAGS):
+            return NOTE_TYPE_WORK
         return NOTE_TYPE_PODCAST
 
     # 2. 录音 → 语音备忘
@@ -369,22 +373,75 @@ def _extract_quotes(raw: dict) -> list[str]:
     return result
 
 
-def _extract_transcript(raw: dict) -> Optional[str]:
+def _parse_sentence_list_json(content: str) -> Optional[str]:
     """
-    提取原始转写内容（带时间戳）。
-    来源：_original 字段（由 fetcher 注入）
+    尝试将 sentence_list JSON 格式的转写内容解析为可读文本。
 
-    Get笔记 _original API 真实字段结构：
+    本地录音笔记的 _original.content 是一个 JSON 字符串，结构为：
     {
-        "title": "...",
-        "content": "[00:00:00]转写文本...",   ← 主要转写字段（播客/语音类才有实质内容）
-        "asr_version": 0,
-        "has_optimized_asr": false,
-        "timeline_moments": null,
-        ...
+        "sentence_list": [
+            {
+                "start_time": 200,    ← 毫秒
+                "end_time": 31360,
+                "text": "...",
+                "speaker_id": 0,
+                ...
+            },
+            ...
+        ],
+        "task_status": 1000
     }
 
-    注意：文章类笔记的 _original.content 只有标题，不是转写，需过滤。
+    转换规则：
+    - start_time（毫秒）→ HH:MM:SS 格式时间戳
+    - 每句话独立一行，格式：`[HH:MM:SS]` 文本内容
+    - 过滤空 text 的句子
+    """
+    import json as _json
+    try:
+        data = _json.loads(content)
+    except (_json.JSONDecodeError, ValueError):
+        return None
+
+    if not isinstance(data, dict):
+        return None
+
+    sentence_list = data.get("sentence_list")
+    if not sentence_list or not isinstance(sentence_list, list):
+        return None
+
+    lines = []
+    for sentence in sentence_list:
+        text = (sentence.get("text") or "").strip()
+        if not text:
+            continue
+        start_ms = sentence.get("start_time") or 0
+        # 毫秒转 HH:MM:SS
+        total_sec = int(start_ms) // 1000
+        hours = total_sec // 3600
+        minutes = (total_sec % 3600) // 60
+        seconds = total_sec % 60
+        ts = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        lines.append(f"`[{ts}]` {text}")
+
+    return "\n\n".join(lines) if lines else None
+
+
+def _extract_transcript(raw: dict) -> Optional[str]:
+    """
+    提取原始内容（带时间戳的转写 或 链接原文）。
+    来源：_original 字段（由 fetcher 注入）
+
+    Get笔记 _original API 真实字段结构（三种情况）：
+
+    1. 播客/外链类（小宇宙等）：content 为带 [HH:MM:SS] 时间戳的逐字转写纯文本
+    2. 本地录音类：content 为 sentence_list JSON 字符串（毫秒时间戳）
+    3. 文章/链接类：content 为网页抓取的纯文字原文（无时间戳）
+
+    过滤规则：
+    - 本地录音：检测到 sentence_list JSON → 解析为带时间戳的可读文本
+    - 其他有效内容：content 长度 > 100 字符 → 直接使用
+    - 仅含标题的无效响应（短字符串）→ 忽略
     """
     original = raw.get("_original")
     if not original:
@@ -392,11 +449,15 @@ def _extract_transcript(raw: dict) -> Optional[str]:
     if isinstance(original, str):
         return original.strip() if original.strip() else None
     if isinstance(original, dict):
-        # 优先：content 字段（Get笔记真实转写字段）
+        # 优先：content 字段（Get笔记真实内容字段）
         content = original.get("content")
         if content and isinstance(content, str) and content.strip():
-            # 用时间戳标记判断是否为真正的转写内容（文章类只有标题，无时间戳）
-            if re.search(r'\[\d{2}:\d{2}:\d{2}\]', content):
+            # 尝试解析为 sentence_list JSON（本地录音格式）
+            parsed = _parse_sentence_list_json(content.strip())
+            if parsed:
+                return parsed
+            # 普通文本：有实质内容（> 100字符）才保留，排除仅含标题的无效响应
+            if len(content.strip()) > 100:
                 return content.strip()
         # 备选：text 字段
         text = original.get("text")

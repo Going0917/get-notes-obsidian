@@ -3,13 +3,18 @@ renderer.py — 输出 Obsidian Markdown
 
 根据笔记类型选择对应模板，生成 Markdown 文件并写入 Obsidian Vault。
 
-目录结构：
-    {vault}/播客笔记/YYYY-MM/{date}_{来源}_{标题}.md
+目录结构（按内容主题域组织，而非来源媒介）：
+    {vault}/播客笔记/{主题子目录}/{date}_{标题}.md
+        主题子目录：AI与科技 / 自我成长 / 财商投资 / 其他播客
+        注：AI 主题的文章也会路由到此处，与播客内容合并
+    {vault}/工作笔记/{date}_{标题}.md
+    {vault}/旅行/{国家或地区}/{date}_{标题}.md
+    {vault}/生活决策/{子目录}/{date}_{标题}.md
+        子目录：租房置业 / 消费选品 / 其他生活
+    {vault}/阅读笔记/YYYY-MM/{date}_{书名}.md
     {vault}/语音备忘/YYYY-MM/{date}_语音备忘_{HHMMSS}.md
-    {vault}/文章剪藏/YYYY-MM/{date}_{标题}.md
-    {vault}/读书笔记/YYYY-MM/{date}_{书名}.md
-    {vault}/工作笔记/YYYY-MM/{date}_{标题}.md
-    {vault}/其他笔记/YYYY-MM/{date}_{标题}.md
+    {vault}/收藏夹/YYYY-MM/{date}_{标题}.md   ← 兜底，无法分类的内容
+    {vault}/其他笔记/YYYY-MM/{date}_{标题}.md  ← 系统笔记等
 """
 import re
 from pathlib import Path
@@ -22,15 +27,66 @@ from .parser import (
     NOTE_TYPE_ARTICLE, NOTE_TYPE_BOOK, NOTE_TYPE_WORK, NOTE_TYPE_UNKNOWN,
 )
 
-# 类型 → 目录名映射
+# 类型 → 目录名映射（兜底用，主要路由逻辑在 get_output_path）
 _TYPE_DIR = {
     NOTE_TYPE_PODCAST: "播客笔记",
     NOTE_TYPE_VOICE:   "语音备忘",
-    NOTE_TYPE_ARTICLE: "文章剪藏",
-    NOTE_TYPE_BOOK:    "读书笔记",
+    NOTE_TYPE_ARTICLE: "收藏夹",
+    NOTE_TYPE_BOOK:    "阅读笔记",
     NOTE_TYPE_WORK:    "工作笔记",
     NOTE_TYPE_UNKNOWN: "其他笔记",
 }
+
+# ────────────────────────────────────────────────────────
+# 播客主题子目录路由
+# 匹配规则：tags 或 title 含以下关键词 → 分入对应子目录
+# 未命中任何规则 → 其他播客
+# 注：文章类内容如果命中了主题关键词，也会路由到此处（跨媒介合并）
+# ────────────────────────────────────────────────────────
+_PODCAST_TOPIC_RULES = [
+    # (子目录名, {关键词集合})
+    ("AI与科技",  {"ai", "人工智能", "科技", "技术", "kimi", "gpt", "llm", "大模型",
+                   "认知", "算法", "深度学习", "机器学习", "ai认知", "ai时代",
+                   "obsidian", "知识管理", "笔记工具"}),
+    ("自我成长",  {"成长", "自我", "心理", "习惯", "效率", "人生", "女性", "社交",
+                   "情绪", "精力", "复利", "学习", "认知升级", "个人发展", "改变"}),
+    ("财商投资",  {"财富", "投资", "金融", "理财", "股票", "基金", "资产", "钱",
+                   "财商", "经济", "商业", "创业", "纳瓦尔", "杠杆", "财务自由"}),
+]
+_PODCAST_DEFAULT_SUBDIR = "其他播客"
+
+# ────────────────────────────────────────────────────────
+# 旅行地区路由
+# 匹配规则：tags 或 title 含地区关键词 → 分入 旅行/{地区}/
+# 地区词本身即旅游触发词（无需单独维护通用旅游词）
+# ────────────────────────────────────────────────────────
+_TRAVEL_REGION_RULES = [
+    # (地区目录名, {关键词集合})
+    ("日本",  {"日本", "japan", "京都", "大阪", "东京", "奈良", "神户", "福冈",
+               "北海道", "冲绳", "关西", "关东", "日式", "岚山", "祇园"}),
+    ("东南亚", {"东南亚", "泰国", "曼谷", "清迈", "越南", "河内", "胡志明", "新加坡",
+                "马来西亚", "吉隆坡", "巴厘岛", "印尼", "菲律宾", "柬埔寨"}),
+    ("欧洲",  {"欧洲", "法国", "巴黎", "英国", "伦敦", "意大利", "罗马", "德国",
+               "西班牙", "葡萄牙", "荷兰", "瑞士", "北欧", "希腊"}),
+    ("港澳台", {"香港", "澳门", "台湾", "台北", "高雄", "台中"}),
+    ("国内",  {"北京", "上海", "广州", "深圳", "成都", "杭州", "西安", "云南",
+               "四川", "新疆", "西藏", "海南", "厦门", "重庆", "武汉", "苏州"}),
+    ("美洲",  {"美国", "纽约", "洛杉矶", "旧金山", "加拿大", "多伦多",
+               "墨西哥", "巴西", "阿根廷"}),
+]
+
+# ────────────────────────────────────────────────────────
+# 生活决策子目录路由
+# 匹配规则：tags 或 title 含以下关键词 → 分入 生活决策/{子目录}/
+# ────────────────────────────────────────────────────────
+_LIFE_TOPIC_RULES = [
+    # (子目录名, {关键词集合})
+    ("租房置业", {"租房", "看房", "房源", "小区", "公寓", "合租", "房租",
+                  "买房", "房产", "装修", "选房", "中介", "租约", "安居"}),
+    ("消费选品", {"测评", "推荐", "好物", "选购", "开箱", "种草",
+                  "购物", "清单", "评测", "性价比", "值不值得买", "好用", "避坑"}),
+]
+_LIFE_DEFAULT_SUBDIR = "其他生活"
 
 
 class ObsidianRenderer:
@@ -42,11 +98,59 @@ class ObsidianRenderer:
     # ────────────────────────────────────────────────
 
     def get_output_path(self, note: ParsedNote) -> Path:
-        """计算目标文件路径（不创建文件）"""
-        type_dir = _TYPE_DIR.get(note.note_type, "其他笔记")
-        month_dir = note.created_month  # 如 "2026-03"
-        filename  = self._make_filename(note)
-        return self.vault / type_dir / month_dir / filename
+        """
+        计算目标文件路径（不创建文件）。
+
+        路由优先级（按内容主题域，不按来源媒介）：
+        1. 播客   → 播客笔记/{主题子目录}/
+        2. 工作   → 工作笔记/
+        3. 文章   → 多层路由（优先级从高到低）：
+              a. 命中主题关键词（AI/成长/财商）→ 播客笔记/{主题子目录}/（跨媒介合并）
+              b. 命中生活决策关键词            → 生活决策/{子目录}/（优先于旅行，防止「深圳租房」误判）
+              c. 命中地区关键词               → 旅行/{地区}/
+              d. 兜底                         → 收藏夹/YYYY-MM/
+        4. 读书   → 阅读笔记/YYYY-MM/
+        5. 语音   → 语音备忘/YYYY-MM/
+        6. 其他   → 其他笔记/YYYY-MM/（系统笔记等）
+        """
+        filename = self._make_filename(note)
+
+        # ── 播客笔记：按主题子目录分类 ──────────────────────
+        if note.note_type == NOTE_TYPE_PODCAST:
+            subdir = _classify_podcast_topic(note)
+            return self.vault / "播客笔记" / subdir / filename
+
+        # ── 工作笔记：顶层工作笔记/，不分月份 ───────────────
+        if note.note_type == NOTE_TYPE_WORK:
+            return self.vault / "工作笔记" / filename
+
+        # ── 文章剪藏：多层路由，按内容主题而非来源媒介 ───────
+        if note.note_type == NOTE_TYPE_ARTICLE:
+            # a. 命中主题关键词 → 与播客内容合并（如 AI 文章进 AI与科技/）
+            topic_subdir = _classify_podcast_topic(note)
+            if topic_subdir != _PODCAST_DEFAULT_SUBDIR:
+                return self.vault / "播客笔记" / topic_subdir / filename
+            # b. 命中生活决策关键词 → 生活决策/{子目录}/（优先于旅行，避免「深圳租房」误判为旅行）
+            life_subdir = _classify_life_topic(note)
+            if life_subdir:
+                return self.vault / "生活决策" / life_subdir / filename
+            # c. 命中地区关键词 → 旅行/{地区}/
+            region = _classify_travel_region(note)
+            if region:
+                return self.vault / "旅行" / region / filename
+            # d. 兜底
+            return self.vault / "收藏夹" / note.created_month / filename
+
+        # ── 读书笔记：阅读笔记/YYYY-MM/ ─────────────────────
+        if note.note_type == NOTE_TYPE_BOOK:
+            return self.vault / "阅读笔记" / note.created_month / filename
+
+        # ── 语音备忘：语音备忘/YYYY-MM/ ─────────────────────
+        if note.note_type == NOTE_TYPE_VOICE:
+            return self.vault / "语音备忘" / note.created_month / filename
+
+        # ── 其他（系统笔记等）────────────────────────────────
+        return self.vault / "其他笔记" / note.created_month / filename
 
     def render(self, note: ParsedNote) -> str:
         """根据笔记类型生成 Markdown 字符串"""
@@ -240,7 +344,9 @@ class ObsidianRenderer:
         if note.quotes:
             sections.append(("💬 划线金句", "💬-划线金句"))
         if note.body_text:
-            sections.append(("📄 原文内容", "📄-原文内容"))
+            sections.append(("📄 AI 笔记", "📄-ai-笔记"))
+        if note.transcript:
+            sections.append(("📃 链接原文", "📃-链接原文"))
 
         lines += _toc(sections)
 
@@ -253,7 +359,10 @@ class ObsidianRenderer:
                 lines += [_quote_line(q), ""]
 
         if note.body_text:
-            lines += ["", "## 📄 原文内容", "", note.body_text, ""]
+            lines += ["", "## 📄 AI 笔记", "", note.body_text, ""]
+
+        if note.transcript:
+            lines += ["", "## 📃 链接原文", "", note.transcript, ""]
 
         return "\n".join(lines)
 
@@ -477,6 +586,64 @@ def _yaml_list(tags: list) -> str:
     if not unique:
         return "[]"
     return "[" + ", ".join(unique) + "]"
+
+
+def _classify_podcast_topic(note: ParsedNote) -> str:
+    """
+    根据笔记的 tags + title，返回主题子目录名。
+    适用于播客笔记，以及路由到播客目录的文章笔记。
+
+    匹配优先级：按 _PODCAST_TOPIC_RULES 顺序（AI与科技 > 自我成长 > 财商投资），
+    未命中则返回默认子目录「其他播客」。
+    """
+    tags_lower = {t.lower() for t in note.tags}
+    title_lower = (note.title or "").lower()
+
+    for subdir, keywords in _PODCAST_TOPIC_RULES:
+        for kw in keywords:
+            if kw in tags_lower or kw in title_lower:
+                return subdir
+    return _PODCAST_DEFAULT_SUBDIR
+
+
+def _classify_travel_region(note: ParsedNote) -> str:
+    """
+    判断文章是否属于旅行类，若是则返回地区目录名，否则返回空字符串。
+
+    匹配逻辑：tags 或 title 含任意地区关键词 → 视为旅行类并返回地区名。
+    未命中任何地区但含通用旅游词（旅游/旅行/攻略）→ 返回「其他目的地」。
+    """
+    tags_lower = {t.lower() for t in note.tags}
+    title_lower = (note.title or "").lower()
+
+    for region, keywords in _TRAVEL_REGION_RULES:
+        for kw in keywords:
+            if kw in tags_lower or kw in title_lower:
+                return region
+
+    # 含通用旅游词但未命中具体地区
+    _GENERAL_TRAVEL = {"旅游", "旅行", "攻略", "出行", "自由行", "深度游", "景点", "酒店"}
+    if any(kw in tags_lower or kw in title_lower for kw in _GENERAL_TRAVEL):
+        return "其他目的地"
+
+    return ""
+
+
+def _classify_life_topic(note: ParsedNote) -> str:
+    """
+    判断文章是否属于生活决策类，若是则返回子目录名，否则返回空字符串。
+
+    匹配规则：tags 或 title 含 _LIFE_TOPIC_RULES 中的关键词 → 对应子目录。
+    未命中任何规则 → 返回空字符串（不强制归入生活决策）。
+    """
+    tags_lower = {t.lower() for t in note.tags}
+    title_lower = (note.title or "").lower()
+
+    for subdir, keywords in _LIFE_TOPIC_RULES:
+        for kw in keywords:
+            if kw in tags_lower or kw in title_lower:
+                return subdir
+    return ""
 
 
 def _now_iso() -> str:
