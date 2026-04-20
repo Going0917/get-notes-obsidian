@@ -216,11 +216,12 @@ class ObsidianRenderer:
             "---",
         ]
 
-        # 语音备忘通常内容单一，不加目录
+        # 语音备忘：AI 整理内容优先展示，原始转写附在后面（两者独立，不互斥）
+        if note.body_text:
+            lines += ["", "## 📝 笔记内容", "", note.body_text, ""]
+
         if note.transcript:
-            lines += ["", "## 🎙 转写内容", "", note.transcript, ""]
-        elif note.body_text:
-            lines += ["", "## 🎙 内容", "", note.body_text, ""]
+            lines += ["", "## 🎙 录音原文", "", note.transcript, ""]
 
         if note.summary:
             lines += ["", "## 📝 AI 整理", "", note.summary, ""]
