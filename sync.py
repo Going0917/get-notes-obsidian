@@ -13,8 +13,8 @@ sync.py — Get 笔记同步主入口
 """
 import argparse
 import sys
-import os
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 
 # 确保项目根目录在 sys.path 中
@@ -27,6 +27,79 @@ from get_notes.fetcher import GetNotesFetcher
 from get_notes.parser import parse_note, BLOCKED_NOTE_IDS
 from get_notes.renderer import ObsidianRenderer
 from get_notes.state import SyncState
+
+
+# ── 同步日志 ────────────────────────────────────────────────────────────────
+
+def _write_sync_log(synced_notes_info: list, vault_path: Path, dry_run: bool = False):
+    """
+    将本次同步记录追加到 Get笔记沉淀/00-同步日志.md。
+
+    参数：
+        synced_notes_info: list of dict，每个元素包含 date / title / note_type / folder
+        vault_path: Obsidian vault 根目录
+        dry_run: True 时只打印，不写文件
+    """
+    if not synced_notes_info:
+        return
+
+    log_path = vault_path / "00-同步日志.md"
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    type_names = {
+        "podcast": "播客", "voice": "语音备忘", "article": "文章",
+        "book": "读书笔记", "work": "工作笔记", "unknown": "其他",
+    }
+
+    # 生成本次同步记录（表格）
+    rows = ""
+    for info in synced_notes_info:
+        title_short = info["title"][:30] + ("…" if len(info["title"]) > 30 else "")
+        type_display = type_names.get(info["note_type"], info["note_type"])
+        filename = info.get("filename", "")
+        # 使用 wikilink 链接到笔记（Obsidian 按 stem 匹配）
+        link = f"[[{filename}\\|{title_short}]]" if filename else title_short
+        rows += f"| {info['date']} | {link} | {type_display} | {info['folder']}/ |\n"
+
+    entry = (
+        f"\n## {timestamp} | 新增 {len(synced_notes_info)} 条\n\n"
+        f"| 日期 | 标题 | 类型 | 位置 |\n"
+        f"|------|------|------|------|\n"
+        f"{rows}\n---\n"
+    )
+
+    if dry_run:
+        print(f"\n  [dry-run] 日志预览 → {log_path}")
+        print(entry)
+        return
+
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    header = (
+        "# Get笔记同步日志\n\n"
+        "> 每次同步自动追加，最新记录在顶\n\n"
+        "---\n"
+    )
+
+    if not log_path.exists():
+        # 首次创建：写入 header + 本次记录
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.write(header + entry)
+    else:
+        # 已存在：在 header 后（第一个 "---\n" 之后）插入本次记录
+        existing = log_path.read_text(encoding="utf-8")
+        insert_pos = existing.find("---\n")
+        if insert_pos == -1:
+            # 找不到分隔符，直接追加
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(entry)
+        else:
+            # 插入到第一个 "---\n" 之后（最新在顶）
+            insert_at = insert_pos + len("---\n")
+            new_content = existing[:insert_at] + entry + existing[insert_at:]
+            log_path.write_text(new_content, encoding="utf-8")
+
+    print(f"  📋 同步日志已更新 → {log_path.name}")
 
 
 def main():
@@ -98,10 +171,11 @@ def main():
     print(f"\n🚀 开始同步 {len(raw_notes)} 条笔记...\n")
 
     # ── 5. 逐条拉取详情 + 解析 + 写入 ─────────────────────────────
-    synced_ids   = []
-    latest_note  = None
-    type_counter = Counter()
-    errors       = []
+    synced_ids        = []
+    synced_notes_info = []   # 用于写入同步日志
+    latest_note       = None
+    type_counter      = Counter()
+    errors            = []
 
     for i, raw in enumerate(raw_notes, 1):
         note_id = raw.get("note_id") or raw.get("id", "?")
@@ -127,6 +201,16 @@ def main():
             synced_ids.append(note_id)
             latest_note = note
 
+            # 收集日志信息
+            folder = str(out_path.parent.relative_to(config.obsidian_vault))
+            synced_notes_info.append({
+                "date":      note.created_date,
+                "title":     note.title or "(无标题)",
+                "note_type": note.note_type,
+                "folder":    folder,
+                "filename":  out_path.stem,  # 用于同步日志 wikilink（不含 .md）
+            })
+
             status = "[dry-run]" if args.dry_run else "✅"
             title_display = note.title[:40] + ("…" if len(note.title) > 40 else "")
             print(f"  {status} [{i}/{len(raw_notes)}] {note.note_type:8} | {note.created_date} | {title_display}")
@@ -141,7 +225,10 @@ def main():
         latest_id = (latest_note.id if latest_note else synced_ids[-1])
         state.update(latest_id, synced_ids)
 
-    # ── 7. 打印摘要 ────────────────────────────────────────────────
+    # ── 7. 写入同步日志 ────────────────────────────────────────────
+    _write_sync_log(synced_notes_info, config.obsidian_vault, dry_run=args.dry_run)
+
+    # ── 8. 打印摘要 ────────────────────────────────────────────────
     print("\n" + "=" * 60)
     if args.dry_run:
         print("📋 [dry-run] 同步预览完成（未写入任何文件）")
@@ -169,3 +256,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

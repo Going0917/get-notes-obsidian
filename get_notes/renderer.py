@@ -4,13 +4,19 @@ renderer.py — 输出 Obsidian Markdown
 根据笔记内容（tags + 标题关键词）路由到对应主题目录，生成 Markdown 文件并写入 Obsidian Vault。
 
 目录结构（按主题，不按来源）：
-    {vault}/AI与技术/{来源}_{标题}_{date}.md
-    {vault}/自我成长/{来源}_{标题}_{date}.md
-    {vault}/财富与投资/{来源}_{标题}_{date}.md
-    {vault}/旅行/日本/{来源}_{标题}_{date}.md
-    {vault}/旅行/国内/{来源}_{标题}_{date}.md
-    {vault}/工作/{来源}_{标题}_{date}.md
-    {vault}/生活/{来源}_{标题}_{date}.md  ← 兜底
+    {vault}/01_AI与科技/{date}_{来源}_{标题}.md
+    {vault}/02_职场工作/会议记录/{date}_{来源}_{标题}.md   ← 含会议/沟通关键词
+    {vault}/02_职场工作/项目复盘/{date}_{来源}_{标题}.md   ← 含复盘/OKR关键词
+    {vault}/02_职场工作/{date}_{来源}_{标题}.md            ← 其余工作笔记
+    {vault}/04_自我成长/{date}_{来源}_{标题}.md
+    {vault}/05_旅行/日本/{date}_{来源}_{标题}.md
+    {vault}/05_旅行/东南亚/{date}_{来源}_{标题}.md
+    {vault}/05_旅行/国内/{date}_{来源}_{标题}.md
+    {vault}/06_生活/运动健康/{date}_{来源}_{标题}.md       ← 含跑步/运动关键词
+    {vault}/06_生活/消费选品/{date}_{来源}_{标题}.md       ← 含选品/好物关键词
+    {vault}/06_生活/{date}_{来源}_{标题}.md                ← 其余生活笔记（兜底）
+    {vault}/07_语音日记/YYYY-MM/{date}_{HHMM}_语音备忘.md  ← 按月分组
+    {vault}/08_读书笔记/{date}_{来源}_{标题}.md
 """
 import re
 from pathlib import Path
@@ -20,47 +26,85 @@ from .config import config
 from .parser import (
     ParsedNote,
     NOTE_TYPE_PODCAST, NOTE_TYPE_VOICE,
-    NOTE_TYPE_ARTICLE, NOTE_TYPE_BOOK, NOTE_TYPE_WORK, NOTE_TYPE_UNKNOWN,
+    NOTE_TYPE_ARTICLE, NOTE_TYPE_BOOK, NOTE_TYPE_WORK,
 )
 
+# 旅行地区关键词路由（字典驱动，新增国家/地区只需在此添加一行，无需修改路由逻辑）
+_TRAVEL_REGIONS = {
+    "05_旅行/日本":  ["日本", "京都", "大阪", "奈良", "东京", "关西", "日本旅游"],
+    "05_旅行/东南亚": ["泰国", "曼谷", "清迈", "巴厘岛", "新加坡", "马来西亚", "越南"],
+    "05_旅行/国内":  ["国内旅行", "上海", "北京", "深圳", "广州", "香港", "成都", "西安", "国内旅游"],
+    # 后续扩展示例（取消注释即可启用）：
+    # "05_旅行/欧洲":   ["巴黎", "伦敦", "罗马", "阿姆斯特丹", "柏林", "西班牙", "意大利"],
+    # "05_旅行/美洲":   ["纽约", "洛杉矶", "旧金山", "加拿大", "墨西哥"],
+}
+
+# 工作笔记子目录路由关键词（优先级：会议记录 > 项目复盘 > 通用工作）
+_WORK_MEETING_KEYWORDS = ["会议", "沟通", "讨论会", "分享会", "行业讨论", "客户沟通", "汇报"]
+_WORK_PROJECT_KEYWORDS = ["答辩", "OKR", "年度规划", "项目复盘", "复盘", "个人项目", "季度"]
+
 # 主题关键词路由规则（按优先级顺序检查，第一个匹配的生效）
+# 注意：旅行路由已移至 _TRAVEL_REGIONS 字典，由 _get_topic_path() 优先处理
 _TOPIC_RULES = [
-    # 旅行 — 日本
-    (["日本", "京都", "大阪", "奈良", "东京", "关西", "日本旅游"],   "旅行/日本"),
-    # 旅行 — 国内
-    (["国内", "上海", "北京", "深圳", "广州", "香港", "国内旅游"],   "旅行/国内"),
     # AI 与技术
     (["AI", "人工智能", "大模型", "LLM", "Claude", "GPT", "Kimi",
-      "技术", "工程", "编程", "提示词", "Obsidian知识管理"],         "AI与技术"),
-    # 财富与投资
-    (["财富", "投资", "理财", "纳瓦尔", "复利", "财商", "保健品",
-      "健康品", "消费"],                                            "财富与投资"),
+      "技术", "工程", "编程", "提示词", "Obsidian知识管理"],         "01_AI与科技"),
+    # 工作（关键词兜底；type=work 已在 _get_topic_path 直接路由，此处捕获边缘情况）
+    (["广告", "商业", "电商", "增长", "品牌", "腾讯", "业务", "运营"], "02_职场工作"),
     # 自我成长
     (["成长", "女性", "认知", "表达", "效率", "习惯", "人际",
-      "心理", "英语", "学习", "思维"],                              "自我成长"),
-    # 生活（健康/运动/极简/选品）
-    (["健康", "运动", "跑步", "马拉松", "健身", "极简", "生活",
-      "音箱", "选品", "旅居"],                                      "生活"),
+      "心理", "英语", "学习", "思维"],                              "04_自我成长"),
+    # 生活 — 运动健康
+    (["跑步", "马拉松", "健身", "训练", "装备", "运动", "健康"],      "06_生活/运动健康"),
+    # 生活 — 消费选品
+    (["选品", "好物", "选购", "音箱", "消费"],                        "06_生活/消费选品"),
+    # 生活（兜底，含财富/投资/极简等）
+    (["财富", "投资", "理财", "纳瓦尔", "复利", "财商",
+      "极简", "生活", "旅居", "保健品", "健康品"],                   "06_生活"),
 ]
 
 
 def _get_topic_path(note: "ParsedNote") -> str:
     """
     根据笔记的 tags 和标题关键词，返回主题目录路径（相对于 vault 根目录）。
-    工作类型笔记直接返回 "工作"，不进行关键词匹配。
-    无匹配时返回 "生活" 作为兜底。
+
+    优先级顺序：
+    1. voice 类型 → "07_语音日记/YYYY-MM"（按月分组）
+    2. work 类型  → 按关键词分流 会议记录/项目复盘，兜底 "02_职场工作"
+    3. book 类型  → 直接返回 "08_读书笔记"
+    4. 旅行关键词 → 遍历 _TRAVEL_REGIONS 字典（新增国家只改配置，不改此函数）
+    5. 主题关键词 → 遍历 _TOPIC_RULES 列表
+    6. 无匹配    → 兜底返回 "06_生活"
     """
+    if note.note_type == NOTE_TYPE_VOICE:
+        month = note.created_date[:7]  # "2026-04" from "2026-04-29"
+        return f"07_语音日记/{month}"
+
     if note.note_type == NOTE_TYPE_WORK:
-        return "工作"
+        search_text = " ".join(note.tags) + " " + (note.title or "")
+        if any(kw in search_text for kw in _WORK_MEETING_KEYWORDS):
+            return "02_职场工作/会议记录"
+        if any(kw in search_text for kw in _WORK_PROJECT_KEYWORDS):
+            return "02_职场工作/项目复盘"
+        return "02_职场工作"
+
+    if note.note_type == NOTE_TYPE_BOOK:
+        return "08_读书笔记"
 
     # 合并 tags 和标题作为搜索文本
     search_text = " ".join(note.tags) + " " + (note.title or "")
 
+    # 旅行路由（字典驱动，可扩展）
+    for travel_dir, keywords in _TRAVEL_REGIONS.items():
+        if any(kw in search_text for kw in keywords):
+            return travel_dir
+
+    # 主题路由
     for keywords, topic_dir in _TOPIC_RULES:
         if any(kw in search_text for kw in keywords):
             return topic_dir
 
-    return "生活"  # 兜底
+    return "06_生活"  # 兜底
 
 
 class ObsidianRenderer:
@@ -440,23 +484,22 @@ class ObsidianRenderer:
         生成安全的文件名（不含非法字符，长度合理）
 
         格式：
-        - 播客/文章/读书/工作：{来源}_{标题}_{date}.md
-        - 语音备忘：语音备忘_{HHMMSS}_{date}.md
+        - 播客/文章/读书/工作：{date}_{来源}_{标题}.md
+        - 语音备忘：{date}_{HHMMSS}_语音备忘.md
         """
         date = note.created_date  # 2026-03-15
 
         if note.note_type == NOTE_TYPE_VOICE:
             time_part = note.created_time_str
-            return f"语音备忘_{time_part}_{date}.md"
+            return f"{date}_{time_part}_语音备忘.md"
 
-        parts = []
+        parts = [date]  # 日期作为前缀，保证文件夹内按时间顺序排列
         if note.source_name:
             parts.append(_sanitize(note.source_name, max_len=20))
         if note.title:
             title_clean = _sanitize(note.title, max_len=40)
             if title_clean and title_clean != _sanitize(note.source_name or "", max_len=20):
                 parts.append(title_clean)
-        parts.append(date)
 
         return "_".join(p for p in parts if p) + ".md"
 
