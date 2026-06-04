@@ -26,7 +26,7 @@ class Config:
 
     # ── Obsidian 输出路径（从 .env 读取） ─────────────────────────
     obsidian_vault: Path = field(default_factory=lambda: Path(
-        os.getenv("OBSIDIAN_VAULT_PATH", "").strip()
+        os.path.expanduser(os.getenv("OBSIDIAN_VAULT_PATH", "").strip())
     ))
 
     # ── 同步行为 ──────────────────────────────────────────────────
