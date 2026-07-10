@@ -15,12 +15,13 @@ renderer.py — 输出 Obsidian Markdown
     {vault}/06_生活/运动健康/{date}_{来源}_{标题}.md       ← 含跑步/运动关键词
     {vault}/06_生活/消费选品/{date}_{来源}_{标题}.md       ← 含选品/好物关键词
     {vault}/06_生活/{date}_{来源}_{标题}.md                ← 其余生活笔记（兜底）
-    {vault}/07_语音日记/YYYY-MM/{date}_{HHMM}_语音备忘.md  ← 按月分组
+    {vault}/07_语音日记/YYYY-MM/{diary_date}_语音备忘.md    ← 按月分组，凌晨录音归前一天
     {vault}/08_读书笔记/{date}_{来源}_{标题}.md
 """
 import re
 from pathlib import Path
 from datetime import datetime, timezone
+from typing import Optional
 
 from .config import config
 from .parser import (
@@ -64,6 +65,24 @@ _TOPIC_RULES = [
 ]
 
 
+def _voice_diary_date(note: "ParsedNote") -> str:
+    """
+    返回语音日记的"日记日期"。
+
+    凌晨 00:00–05:59 录制的内容，通常是前一天的日记，归入前一天。
+    例：2026-06-02 02:28 录制 → 日记日期 2026-06-01
+    """
+    from datetime import timedelta
+    try:
+        ts = note.created_at.replace("Z", "+00:00").replace(" ", "T")
+        dt = datetime.fromisoformat(ts)
+        if dt.hour < 6:
+            dt -= timedelta(days=1)
+        return dt.strftime("%Y-%m-%d")
+    except (ValueError, AttributeError):
+        return note.created_date
+
+
 def _get_topic_path(note: "ParsedNote") -> str:
     """
     根据笔记的 tags 和标题关键词，返回主题目录路径（相对于 vault 根目录）。
@@ -77,7 +96,7 @@ def _get_topic_path(note: "ParsedNote") -> str:
     6. 无匹配    → 兜底返回 "06_生活"
     """
     if note.note_type == NOTE_TYPE_VOICE:
-        month = note.created_date[:7]  # "2026-04" from "2026-04-29"
+        month = _voice_diary_date(note)[:7]  # 凌晨录音归前一天的月份
         return f"07_语音日记/{month}"
 
     if note.note_type == NOTE_TYPE_WORK:
@@ -110,6 +129,8 @@ def _get_topic_path(note: "ParsedNote") -> str:
 class ObsidianRenderer:
     def __init__(self, vault_path: Path = None):
         self.vault = vault_path or config.obsidian_vault
+        self._id_index = None
+        self._duplicate_ids = {}
 
     # ────────────────────────────────────────────────
     # 公开接口
@@ -133,7 +154,17 @@ class ObsidianRenderer:
         renderer_fn = template_map.get(note.note_type, self._render_unknown)
         return renderer_fn(note)
 
-    def write(self, note: ParsedNote, dry_run: bool = False) -> Path:
+    def existing_note_count(self) -> int:
+        """返回 vault 中已索引的 Get 笔记 ID 数量。"""
+        self._ensure_id_index()
+        return len(self._id_index)
+
+    def duplicate_id_count(self) -> int:
+        """返回 vault 中重复出现的 Get 笔记 ID 数量。"""
+        self._ensure_id_index()
+        return len(self._duplicate_ids)
+
+    def write(self, note: ParsedNote, dry_run: bool = False) -> tuple[Path, bool, str]:
         """
         渲染并写入文件。
 
@@ -141,26 +172,71 @@ class ObsidianRenderer:
             dry_run: True 时只打印路径，不实际写入
 
         返回：
-            目标文件路径
+            (目标文件路径, 是否新写入, 原因)
         """
+        existing_path = self.find_existing_path(note)
+        if existing_path:
+            return existing_path, False, "existing-id"
+
         output_path = self.get_output_path(note)
 
         if dry_run:
             print(f"  [dry-run] → {output_path}")
-            return output_path
+            return output_path, True, "dry-run"
 
         # 目录不存在则创建
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # 已存在则跳过（防重保险）
-        if output_path.exists():
-            return output_path
+        # 语音备忘：同一天有多条时加 _2 _3 后缀（避免覆盖）
+        if note.note_type == NOTE_TYPE_VOICE:
+            stem = output_path.stem
+            for i in range(2, 99):
+                if not output_path.exists():
+                    break
+                output_path = output_path.parent / f"{stem}_{i}.md"
+
+        # 其他类型：已存在则跳过（防重保险）
+        elif output_path.exists():
+            return output_path, False, "existing-path"
 
         content = self.render(note)
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(content)
 
-        return output_path
+        self._remember_written_note(note, output_path)
+        return output_path, True, "written"
+
+    def find_existing_path(self, note: ParsedNote) -> Optional[Path]:
+        """按 frontmatter 中的 Get 笔记 ID 在整个 vault 内查找已存在文件。"""
+        self._ensure_id_index()
+        return self._id_index.get(_frontmatter_id(note))
+
+    def _ensure_id_index(self):
+        """构建 id -> path 索引，避免目录/文件名规则变化后重复写入。"""
+        if self._id_index is not None:
+            return
+
+        self._id_index = {}
+        duplicates = {}
+        if not self.vault.exists():
+            self._duplicate_ids = duplicates
+            return
+
+        for path in sorted(self.vault.rglob("*.md")):
+            note_id = _extract_frontmatter_id(path)
+            if not note_id:
+                continue
+            if note_id in self._id_index:
+                duplicates.setdefault(note_id, [self._id_index[note_id]]).append(path)
+                continue
+            self._id_index[note_id] = path
+
+        self._duplicate_ids = duplicates
+
+    def _remember_written_note(self, note: ParsedNote, path: Path):
+        """写入新文件后更新内存索引，防止同一轮重复处理。"""
+        self._ensure_id_index()
+        self._id_index[_frontmatter_id(note)] = path
 
     # ────────────────────────────────────────────────
     # 模板渲染
@@ -484,16 +560,16 @@ class ObsidianRenderer:
         生成安全的文件名（不含非法字符，长度合理）
 
         格式：
-        - 播客/文章/读书/工作：{date}_{来源}_{标题}.md
-        - 语音备忘：{date}_{HHMMSS}_语音备忘.md
+        - 播客/文章/读书/工作：{date}_get-{id}_{来源}_{标题}.md
+        - 语音备忘：{diary_date}_get-{id}_语音备忘.md（凌晨录音归前一天）
         """
         date = note.created_date  # 2026-03-15
+        note_id = _sanitize(f"get-{note.id}", max_len=32)
 
         if note.note_type == NOTE_TYPE_VOICE:
-            time_part = note.created_time_str
-            return f"{date}_{time_part}_语音备忘.md"
+            return f"{_voice_diary_date(note)}_{note_id}_语音备忘.md"
 
-        parts = [date]  # 日期作为前缀，保证文件夹内按时间顺序排列
+        parts = [date, note_id]  # 日期前缀便于排序，ID 保证跨版本稳定
         if note.source_name:
             parts.append(_sanitize(note.source_name, max_len=20))
         if note.title:
@@ -537,6 +613,33 @@ def _sanitize(text: str, max_len: int = 50) -> str:
     # 压缩多余空白
     text = re.sub(r"\s+", " ", text).strip()
     return text[:max_len]
+
+
+def _frontmatter_id(note: ParsedNote) -> str:
+    """返回当前同步器写入 frontmatter 时使用的稳定 ID。"""
+    raw_id = str(note.id or "").strip()
+    return raw_id if raw_id.startswith("get-") else f"get-{raw_id}"
+
+
+def _extract_frontmatter_id(path: Path) -> Optional[str]:
+    """从 Markdown frontmatter 中提取 id 字段。"""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            first = f.readline().strip()
+            if first != "---":
+                return None
+            for _ in range(80):
+                line = f.readline()
+                if not line:
+                    return None
+                stripped = line.strip()
+                if stripped == "---":
+                    return None
+                if stripped.startswith("id:"):
+                    return stripped.split(":", 1)[1].strip().strip('"').strip("'")
+    except OSError:
+        return None
+    return None
 
 
 def _escape_yaml(text: str) -> str:

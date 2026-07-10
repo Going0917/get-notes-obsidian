@@ -12,6 +12,7 @@ sync.py — Get 笔记同步主入口
 完成后打印摘要：同步条数、类型分布、最新笔记标题。
 """
 import argparse
+import subprocess
 import sys
 from collections import Counter
 from datetime import datetime
@@ -23,8 +24,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 from get_notes.auth import GetNotesAuth
 from get_notes.client import GetNotesClient
 from get_notes.config import config
+from get_notes.diary_writer import DiaryWriter, STATUS_WRITTEN, STATUS_SKIPPED, STATUS_NO_DIARY, STATUS_NO_NOTES
 from get_notes.fetcher import GetNotesFetcher
-from get_notes.parser import parse_note, BLOCKED_NOTE_IDS
+from get_notes.parser import parse_note, BLOCKED_NOTE_IDS, NOTE_TYPE_VOICE
 from get_notes.renderer import ObsidianRenderer
 from get_notes.state import SyncState
 
@@ -102,6 +104,31 @@ def _write_sync_log(synced_notes_info: list, vault_path: Path, dry_run: bool = F
     print(f"  📋 同步日志已更新 → {log_path.name}")
 
 
+def _git_status_line() -> str:
+    """返回当前同步器版本状态，帮助排查不同 Agent 使用不同版本的问题。"""
+    root = Path(__file__).parent
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "同步器版本：非 Git 环境或无法读取"
+
+    dirty = "有未提交改动" if status else "干净"
+    return f"同步器版本：{commit}（{dirty}）"
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="将 Get 笔记同步到 Obsidian Vault",
@@ -134,11 +161,18 @@ def main():
     print("=" * 60)
 
     # ── 1. 初始化 ─────────────────────────────────────────────────
-    state    = SyncState()
-    renderer = ObsidianRenderer()
+    state        = SyncState()
+    renderer     = ObsidianRenderer()
+    diary_writer = DiaryWriter(config.obsidian_vault)
 
     print(f"📂 输出目录：{config.obsidian_vault}")
     print(f"📊 {state.summary()}")
+    print(f"🔖 {_git_status_line()}")
+    print(
+        "🧭 已建立全局去重索引："
+        f"{renderer.existing_note_count()} 个 Get 笔记 ID"
+        f"（重复 ID {renderer.duplicate_id_count()} 组）"
+    )
 
     # ── 2. 获取 Token ──────────────────────────────────────────────
     auth  = GetNotesAuth()
@@ -175,6 +209,7 @@ def main():
     synced_notes_info = []   # 用于写入同步日志
     latest_note       = None
     type_counter      = Counter()
+    skipped_existing  = 0
     errors            = []
 
     for i, raw in enumerate(raw_notes, 1):
@@ -194,26 +229,53 @@ def main():
             if args.type and note.note_type != args.type:
                 continue
 
-            # 写入 Obsidian
-            out_path = renderer.write(note, dry_run=args.dry_run)
+            # 写入 Obsidian（全局按 id 去重，避免目录/文件名规则变化后重复写）
+            out_path, did_write, write_reason = renderer.write(note, dry_run=args.dry_run)
 
-            type_counter[note.note_type] += 1
+            # 语音备忘：同步写入对应日记的流水账
+            diary_status = None
+            diary_msg    = None
+            if did_write and note.note_type == NOTE_TYPE_VOICE:
+                d_status, d_msg = diary_writer.write_to_diary(note, dry_run=args.dry_run)
+                diary_status = d_status
+                diary_msg    = d_msg
+
+            if did_write:
+                type_counter[note.note_type] += 1
+            else:
+                skipped_existing += 1
             synced_ids.append(note_id)
             latest_note = note
 
             # 收集日志信息
             folder = str(out_path.parent.relative_to(config.obsidian_vault))
-            synced_notes_info.append({
-                "date":      note.created_date,
-                "title":     note.title or "(无标题)",
-                "note_type": note.note_type,
-                "folder":    folder,
-                "filename":  out_path.stem,  # 用于同步日志 wikilink（不含 .md）
-            })
+            if did_write:
+                synced_notes_info.append({
+                    "date":      note.created_date,
+                    "title":     note.title or "(无标题)",
+                    "note_type": note.note_type,
+                    "folder":    folder,
+                    "filename":  out_path.stem,  # 用于同步日志 wikilink（不含 .md）
+                })
 
-            status = "[dry-run]" if args.dry_run else "✅"
+            if args.dry_run:
+                status = "[dry-run]" if did_write else "[dry-run skip]"
+            else:
+                status = "✅" if did_write else "⏭"
             title_display = note.title[:40] + ("…" if len(note.title) > 40 else "")
             print(f"  {status} [{i}/{len(raw_notes)}] {note.note_type:8} | {note.created_date} | {title_display}")
+            if not did_write:
+                print(f"       已存在，跳过写入（{write_reason}）：{out_path.relative_to(config.obsidian_vault)}")
+
+            # 打印日记写入结果
+            if diary_status == STATUS_WRITTEN:
+                print(f"       📖 {diary_msg}")
+            elif diary_status == STATUS_SKIPPED:
+                print(f"       ⏭  日记：{diary_msg}")
+            elif diary_status == STATUS_NO_DIARY:
+                print(f"       ⚠️  日记：{diary_msg}")
+            elif diary_status == STATUS_NO_NOTES:
+                pass  # 无笔记内容时静默跳过，不打扰视觉
 
         except Exception as e:
             errors.append((note_id, str(e)))
@@ -235,7 +297,10 @@ def main():
     else:
         print("📋 同步完成")
 
-    print(f"   本次同步：{len(synced_ids)} 条")
+    print(f"   本次处理：{len(synced_ids)} 条")
+    print(f"   新写入：{sum(type_counter.values())} 条")
+    if skipped_existing:
+        print(f"   已存在跳过：{skipped_existing} 条")
     if type_counter:
         type_names = {
             "podcast": "播客", "voice": "语音备忘", "article": "文章",
@@ -256,4 +321,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
