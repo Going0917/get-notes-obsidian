@@ -12,6 +12,7 @@ sync.py — Get 笔记同步主入口
 完成后打印摘要：同步条数、类型分布、最新笔记标题。
 """
 import argparse
+import re
 import subprocess
 import sys
 from collections import Counter
@@ -49,7 +50,7 @@ def _write_sync_log(synced_notes_info: list, vault_path: Path, dry_run: bool = F
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     type_names = {
-        "podcast": "播客", "voice": "语音备忘", "article": "文章",
+        "podcast": "播客", "voice": "语音日记", "article": "文章",
         "book": "读书笔记", "work": "工作笔记", "unknown": "其他",
     }
 
@@ -58,21 +59,64 @@ def _write_sync_log(synced_notes_info: list, vault_path: Path, dry_run: bool = F
             return f"{date_str[2:4]}.{date_str[5:7]}.{date_str[8:10]}"
         return date_str or "unknown"
 
-    # 生成本次同步记录（表格）
-    rows = ""
+    # 生成本次同步记录（表格行）
+    rows = []
     for info in sorted(synced_notes_info, key=lambda item: item.get("date", ""), reverse=True):
         title_display = info["title"]
         type_display = type_names.get(info["note_type"], info["note_type"])
         filename = info.get("filename", "")
+        folder = (info.get("folder") or "").rstrip("/")
         # 使用 wikilink 链接到笔记（Obsidian 按 stem 匹配）
         link = f"[[{filename}\\|{title_display}]]" if filename else title_display
-        rows += f"| {short_date(info['date'])} | {link} | {type_display} | {info['folder']}/ |\n"
+        rows.append(f"| {short_date(info['date'])} | {link} | {type_display} | {folder} |")
+
+    def aggregate_log_content(existing: str, new_rows: list[str]) -> str:
+        row_re = re.compile(r"^\|\s*(.*?)\s*\|\s*(.*)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|$")
+        by_title: dict[str, tuple[str, str, str, str]] = {}
+
+        def add_row(line: str):
+            match = row_re.match(line)
+            if not match:
+                return
+            date, title, note_type, folder = [part.strip() for part in match.groups()]
+            if date == "日期" or set(date) <= {"-"}:
+                return
+            by_title[title] = (date, title, note_type, folder.rstrip("/"))
+
+        for line in existing.splitlines():
+            if line.startswith("|"):
+                add_row(line)
+        for line in new_rows:
+            add_row(line)
+
+        def row_sort_key(row: tuple[str, str, str, str]):
+            date = row[0]
+            if re.match(r"^\d{2}\.\d{2}\.\d{2}$", date):
+                return (0, date)
+            return (1, "")
+
+        sorted_rows = sorted(by_title.values(), key=row_sort_key, reverse=True)
+        dated_rows = [row for row in sorted_rows if row[0] != "—"]
+        unknown_rows = [row for row in sorted_rows if row[0] == "—"]
+        rows_out = dated_rows + unknown_rows
+
+        lines = [
+            "# Get 笔记沉淀 — 同步总表",
+            "",
+            f"> 共 {len(rows_out)} 条笔记，按日期倒序，自动生成",
+            "",
+            "| 日期 | 标题 | 类型 | 位置 |",
+            "|------|------|------|------|",
+        ]
+        lines.extend(f"| {date} | {title} | {note_type} | {folder} |" for date, title, note_type, folder in rows_out)
+        lines.append("")
+        return "\n".join(lines)
 
     entry = (
         f"\n## {timestamp} | 新增 {len(synced_notes_info)} 条\n\n"
         f"| 日期 | 标题 | 类型 | 位置 |\n"
         f"|------|------|------|------|\n"
-        f"{rows}\n---\n"
+        f"{chr(10).join(rows)}\n\n---\n"
     )
 
     if dry_run:
@@ -95,6 +139,11 @@ def _write_sync_log(synced_notes_info: list, vault_path: Path, dry_run: bool = F
     else:
         # 已存在：在 header 后（第一个 "---\n" 之后）插入本次记录
         existing = log_path.read_text(encoding="utf-8")
+        if existing.startswith("# Get 笔记沉淀 — 同步总表"):
+            log_path.write_text(aggregate_log_content(existing, rows), encoding="utf-8")
+            print(f"  📋 同步日志已更新 → {log_path.name}")
+            return
+
         insert_pos = existing.find("---\n")
         if insert_pos == -1:
             # 找不到分隔符，直接追加
