@@ -4,19 +4,19 @@ renderer.py — 输出 Obsidian Markdown
 根据笔记内容（tags + 标题关键词）路由到对应主题目录，生成 Markdown 文件并写入 Obsidian Vault。
 
 目录结构（按主题，不按来源）：
-    {vault}/01_AI与科技/{date}_{来源}_{标题}.md
-    {vault}/02_职场工作/会议记录/{date}_{来源}_{标题}.md   ← 含会议/沟通关键词
-    {vault}/02_职场工作/项目复盘/{date}_{来源}_{标题}.md   ← 含复盘/OKR关键词
-    {vault}/02_职场工作/{date}_{来源}_{标题}.md            ← 其余工作笔记
-    {vault}/04_自我成长/{date}_{来源}_{标题}.md
-    {vault}/05_旅行/日本/{date}_{来源}_{标题}.md
-    {vault}/05_旅行/东南亚/{date}_{来源}_{标题}.md
-    {vault}/05_旅行/国内/{date}_{来源}_{标题}.md
-    {vault}/06_生活/运动健康/{date}_{来源}_{标题}.md       ← 含跑步/运动关键词
-    {vault}/06_生活/消费选品/{date}_{来源}_{标题}.md       ← 含选品/好物关键词
-    {vault}/06_生活/{date}_{来源}_{标题}.md                ← 其余生活笔记（兜底）
-    {vault}/07_语音日记/YYYY-MM/{diary_date}_语音备忘.md    ← 按月分组，凌晨录音归前一天
-    {vault}/08_读书笔记/{date}_{来源}_{标题}.md
+    {vault}/01_AI与科技/{date}_{标题}.md
+    {vault}/02_职场工作/01_客户沟通复盘/{客户}/{date}_{标题}.md
+    {vault}/02_职场工作/02_业务主题研究/{主题}/{date}_{标题}.md
+    {vault}/02_职场工作/03_内部汇报与项目复盘/{主题}/{date}_{标题}.md
+    {vault}/02_职场工作/04_AI工具与业务提效/{date}_{标题}.md
+    {vault}/02_职场工作/99_待归类/{date}_{标题}.md
+    {vault}/03_财商投资/{date}_{标题}.md
+    {vault}/04_自我成长/{主题}/{date}_{标题}.md
+    {vault}/05_旅行/{地区}/{date}_{标题}.md
+    {vault}/06_生活/{主题}/{date}_{标题}.md
+    {vault}/07_语音日记/YYYY-MM/{diary_date}_{HHMM}_语音日记.md
+    {vault}/08_读书笔记/{date}_{标题}.md
+    {vault}/09_英语学习/{主题}/{date}_{标题}.md
 """
 import re
 from pathlib import Path
@@ -40,30 +40,47 @@ _TRAVEL_REGIONS = {
     # "05_旅行/美洲":   ["纽约", "洛杉矶", "旧金山", "加拿大", "墨西哥"],
 }
 
-# 工作笔记子目录路由关键词（优先级：会议记录 > 项目复盘 > 通用工作）
-_WORK_MEETING_KEYWORDS = ["会议", "沟通", "讨论会", "分享会", "行业讨论", "客户沟通", "汇报"]
-_WORK_PROJECT_KEYWORDS = ["答辩", "OKR", "年度规划", "项目复盘", "复盘", "个人项目", "季度"]
+_WORK_BRAND_RULES = [
+    ("华大营养", ["华大", "华大营养"]),
+    ("诺特兰德", ["诺特兰德", "林诺德"]),
+    ("星盟", ["星盟"]),
+    ("万益蓝", ["万益蓝", "万叶兰"]),
+    ("养元健", ["养元健", "养能健"]),
+    ("多燕瘦", ["多燕瘦"]),
+    ("Swisse", ["Swisse", "Swiss"]),
+    ("谷雨", ["谷雨"]),
+]
+
+_WORK_TOPIC_RULES = [
+    ("02_业务主题研究/视频号小店与直播电商", ["视频号", "直播", "小店", "618", "电商", "GMV", "货架"]),
+    ("02_业务主题研究/投放与广告策略", ["广告", "投放", "智投", "预算", "ROI", "消耗", "转化"]),
+    ("02_业务主题研究/私域与公私域联动", ["私域", "公私域", "企微", "社群", "营销云"]),
+    ("02_业务主题研究/内容力与商品力", ["内容力", "商品力", "素材", "达人", "种草", "短视频"]),
+    ("02_业务主题研究/大健康与营养品类", ["大健康", "营养", "保健品", "膳食", "益生菌"]),
+    ("03_内部汇报与项目复盘/晋升答辩", ["晋升", "答辩"]),
+    ("03_内部汇报与项目复盘/OKR与业务规划", ["OKR", "okr", "年度规划", "季度规划", "Q3", "Q4", "行业规划"]),
+    ("03_内部汇报与项目复盘/内部分享", ["汇报", "分享", "训练营", "团队", "内部"]),
+    ("04_AI工具与业务提效", ["AI", "人工智能", "智能体", "Agent", "工具", "提效", "自动化"]),
+]
 
 # 主题关键词路由规则（按优先级顺序检查，第一个匹配的生效）
 # 注意：旅行路由已移至 _TRAVEL_REGIONS 字典，由 _get_topic_path() 优先处理
-_TOPIC_RULES = [
-    # 财商投资（放在 AI 之前，避免 "AI链接笔记" 这类通用标签盖过主题）
-    (["财富", "投资", "理财", "FIRE", "纳瓦尔", "复利", "财商",
-      "资产", "股东信", "巴菲特", "被动收入"],                   "03_财商投资"),
-    # AI 与技术
-    (["AI", "人工智能", "大模型", "LLM", "Claude", "GPT", "Kimi",
-      "技术", "工程", "编程", "提示词", "Obsidian知识管理"],         "01_AI与科技"),
-    # 工作（关键词兜底；type=work 已在 _get_topic_path 直接路由，此处捕获边缘情况）
-    (["广告", "商业", "电商", "增长", "品牌", "腾讯", "业务", "运营"], "02_职场工作"),
-    # 自我成长
-    (["成长", "女性", "认知", "表达", "效率", "习惯", "人际",
-      "心理", "英语", "学习", "思维"],                              "04_自我成长"),
-    # 生活 — 运动健康
-    (["跑步", "马拉松", "健身", "训练", "装备", "运动", "健康"],      "06_生活/运动健康"),
-    # 生活 — 消费选品
-    (["选品", "好物", "选购", "音箱", "消费"],                        "06_生活/消费选品"),
-    # 生活兜底
-    (["极简", "生活", "旅居", "保健品", "健康品"],                   "06_生活"),
+_FINANCE_KEYWORDS = ["财富", "投资", "理财", "FIRE", "纳瓦尔", "复利", "财商", "资产配置", "股东信", "巴菲特", "被动收入", "凯利"]
+_AI_KEYWORDS = ["AI", "人工智能", "大模型", "LLM", "Claude", "GPT", "Kimi", "技术", "工程", "编程", "提示词", "Obsidian知识管理"]
+_ENGLISH_KEYWORDS = ["英语", "哑巴英语", "元宝App"]
+_WORK_KEYWORDS = ["客户", "业务", "电商", "广告", "投放", "腾讯", "商销", "视频号", "保健品", "营养", "开品", "会议", "复盘"]
+
+_GROWTH_RULES = [
+    ("04_自我成长/04_关系与沟通", ["表达", "影响力", "说教", "沟通困境", "人际关系"]),
+    ("04_自我成长/02_心理与情绪", ["焦虑", "情绪", "心理", "不抱怨", "虚无主义", "创伤", "空心人", "对抗焦虑"]),
+    ("04_自我成长/03_职业心态与成长", ["职场妈妈", "职业倦怠", "职场困境", "初入职场", "职场人", "工作伦理", "职业心态"]),
+    ("04_自我成长/01_认知与表达", ["成长", "时间管理", "奥德赛", "自我探索", "人生", "钱理群", "女性", "认知", "超级个体"]),
+]
+
+_LIFE_RULES = [
+    ("06_生活/运动健康", ["睡眠", "激素", "皮质醇", "过度训练", "跳箱", "镁离子", "健身", "训练恢复"]),
+    ("06_生活/消费选品", ["选品", "好物", "选购", "音箱", "消费"]),
+    ("06_生活", ["极简", "生活转型", "蛋糕"]),
 ]
 
 
@@ -85,45 +102,94 @@ def _voice_diary_date(note: "ParsedNote") -> str:
         return note.created_date
 
 
+def _search_text(note: "ParsedNote") -> str:
+    # 路由只使用标题、标签和来源，避免正文里的泛关键词造成跨主题误判。
+    return " ".join([
+        " ".join(note.tags),
+        note.title or "",
+        note.source_name or "",
+        note.source_url or "",
+    ])
+
+
+def _contains_any(text: str, keywords: list[str]) -> bool:
+    return any(keyword in text for keyword in keywords)
+
+
+def _is_external_podcast(note: "ParsedNote") -> bool:
+    return note.note_type == NOTE_TYPE_PODCAST and "xiaoyuzhoufm.com" in (note.source_url or "")
+
+
+def _get_work_path(note: "ParsedNote", search_text: str) -> str:
+    for brand, keywords in _WORK_BRAND_RULES:
+        if _contains_any(search_text, keywords):
+            return f"02_职场工作/01_客户沟通复盘/{brand}"
+
+    for suffix, keywords in _WORK_TOPIC_RULES:
+        if _contains_any(search_text, keywords):
+            return f"02_职场工作/{suffix}"
+
+    return "02_职场工作/99_待归类"
+
+
+def _get_rule_path(search_text: str, rules: list[tuple[str, list[str]]]) -> Optional[str]:
+    for path, keywords in rules:
+        if _contains_any(search_text, keywords):
+            return path
+    return None
+
+
 def _get_topic_path(note: "ParsedNote") -> str:
     """
     根据笔记的 tags 和标题关键词，返回主题目录路径（相对于 vault 根目录）。
 
     优先级顺序：
     1. voice 类型 → "07_语音日记/YYYY-MM"（按月分组）
-    2. work 类型  → 按关键词分流 会议记录/项目复盘，兜底 "02_职场工作"
+    2. work 类型  → 按客户/业务主题/内部复盘分流
     3. book 类型  → 直接返回 "08_读书笔记"
     4. 旅行关键词 → 遍历 _TRAVEL_REGIONS 字典（新增国家只改配置，不改此函数）
-    5. 主题关键词 → 遍历 _TOPIC_RULES 列表
+    5. 主题关键词 → 英语/财商/成长/生活/AI
     6. 无匹配    → 兜底返回 "06_生活"
     """
     if note.note_type == NOTE_TYPE_VOICE:
         month = _voice_diary_date(note)[:7]  # 凌晨录音归前一天的月份
         return f"07_语音日记/{month}"
 
+    search_text = _search_text(note)
+
     if note.note_type == NOTE_TYPE_WORK:
-        search_text = " ".join(note.tags) + " " + (note.title or "")
-        if any(kw in search_text for kw in _WORK_MEETING_KEYWORDS):
-            return "02_职场工作/会议记录"
-        if any(kw in search_text for kw in _WORK_PROJECT_KEYWORDS):
-            return "02_职场工作/项目复盘"
-        return "02_职场工作"
+        return _get_work_path(note, search_text)
 
     if note.note_type == NOTE_TYPE_BOOK:
         return "08_读书笔记"
 
-    # 合并 tags 和标题作为搜索文本
-    search_text = " ".join(note.tags) + " " + (note.title or "")
-
     # 旅行路由（字典驱动，可扩展）
     for travel_dir, keywords in _TRAVEL_REGIONS.items():
-        if any(kw in search_text for kw in keywords):
+        if _contains_any(search_text, keywords):
             return travel_dir
 
-    # 主题路由
-    for keywords, topic_dir in _TOPIC_RULES:
-        if any(kw in search_text for kw in keywords):
-            return topic_dir
+    if note.note_type == "english-learning" or _contains_any(search_text, _ENGLISH_KEYWORDS):
+        if _contains_any(search_text, ["场景", "咖啡馆", "餐厅", "机场", "酒店", "问路", "交通"]):
+            return "09_英语学习/口语场景"
+        return "09_英语学习/学习计划"
+
+    if _contains_any(search_text, _FINANCE_KEYWORDS):
+        return "03_财商投资"
+
+    # 外部播客不按“职场工作”归档，除非已经被解析为 work。
+    if not _is_external_podcast(note) and _contains_any(search_text, _WORK_KEYWORDS):
+        return _get_work_path(note, search_text)
+
+    growth_path = _get_rule_path(search_text, _GROWTH_RULES)
+    if growth_path:
+        return growth_path
+
+    life_path = _get_rule_path(search_text, _LIFE_RULES)
+    if life_path:
+        return life_path
+
+    if _contains_any(search_text, _AI_KEYWORDS):
+        return "01_AI与科技"
 
     return "06_生活"  # 兜底
 
@@ -553,22 +619,20 @@ class ObsidianRenderer:
         生成安全的文件名（不含非法字符，长度合理）
 
         格式：
-        - 播客/文章/读书/工作：{date}_{来源}_{标题}.md
-        - 语音备忘：{diary_date}_语音备忘.md（凌晨录音归前一天）
+        - 播客/文章/读书/工作：{date}_{标题}.md
+        - 语音备忘：{diary_date}_{HHMM}_语音日记.md（凌晨录音归前一天）
 
         Get 笔记 ID 只保存在 frontmatter 中，用于机器去重，不暴露在文件名里。
         """
         date = note.created_date  # 2026-03-15
 
         if note.note_type == NOTE_TYPE_VOICE:
-            return f"{_voice_diary_date(note)}_语音备忘.md"
+            return f"{_voice_diary_date(note)}_{note.created_time_str[:4]}_语音日记.md"
 
         parts = [date]  # 日期前缀便于排序；ID 留在 frontmatter 中做全局去重
-        if note.source_name:
-            parts.append(_sanitize(note.source_name, max_len=20))
         if note.title:
             title_clean = _sanitize(note.title, max_len=40)
-            if title_clean and title_clean != _sanitize(note.source_name or "", max_len=20):
+            if title_clean:
                 parts.append(title_clean)
 
         return "_".join(p for p in parts if p) + ".md"
