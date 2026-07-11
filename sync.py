@@ -53,15 +53,20 @@ def _write_sync_log(synced_notes_info: list, vault_path: Path, dry_run: bool = F
         "book": "读书笔记", "work": "工作笔记", "unknown": "其他",
     }
 
+    def short_date(date_str: str) -> str:
+        if date_str and len(date_str) >= 10 and date_str[:4].isdigit():
+            return f"{date_str[2:4]}.{date_str[5:7]}.{date_str[8:10]}"
+        return date_str or "unknown"
+
     # 生成本次同步记录（表格）
     rows = ""
-    for info in synced_notes_info:
-        title_short = info["title"][:30] + ("…" if len(info["title"]) > 30 else "")
+    for info in sorted(synced_notes_info, key=lambda item: item.get("date", ""), reverse=True):
+        title_display = info["title"]
         type_display = type_names.get(info["note_type"], info["note_type"])
         filename = info.get("filename", "")
         # 使用 wikilink 链接到笔记（Obsidian 按 stem 匹配）
-        link = f"[[{filename}\\|{title_short}]]" if filename else title_short
-        rows += f"| {info['date']} | {link} | {type_display} | {info['folder']}/ |\n"
+        link = f"[[{filename}\\|{title_display}]]" if filename else title_display
+        rows += f"| {short_date(info['date'])} | {link} | {type_display} | {info['folder']}/ |\n"
 
     entry = (
         f"\n## {timestamp} | 新增 {len(synced_notes_info)} 条\n\n"

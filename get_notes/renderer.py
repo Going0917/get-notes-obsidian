@@ -106,6 +106,14 @@ def _voice_diary_date(note: "ParsedNote") -> str:
         return note.created_date
 
 
+def _short_date(date_str: str) -> str:
+    """Convert YYYY-MM-DD to YY.MM.DD for reader-friendly filenames."""
+    match = re.match(r"^20(\d{2})-(\d{2})-(\d{2})", date_str or "")
+    if not match:
+        return date_str or "unknown"
+    return f"{match.group(1)}.{match.group(2)}.{match.group(3)}"
+
+
 def _search_text(note: "ParsedNote") -> str:
     # 路由只使用标题、标签和来源，避免正文里的泛关键词造成跨主题误判。
     return " ".join([
@@ -629,15 +637,15 @@ class ObsidianRenderer:
         生成安全的文件名（不含非法字符，长度合理）
 
         格式：
-        - 播客/文章/读书/工作：{date}_{标题}.md
-        - 语音备忘：{diary_date}_{HHMM}_语音日记.md（凌晨录音归前一天）
+        - 播客/文章/读书/工作：{YY.MM.DD}_{标题}.md
+        - 语音备忘：{YY.MM.DD}_{HHMM}_语音日记.md（凌晨录音归前一天）
 
         Get 笔记 ID 只保存在 frontmatter 中，用于机器去重，不暴露在文件名里。
         """
-        date = note.created_date  # 2026-03-15
+        date = _short_date(note.created_date)  # 26.03.15
 
         if note.note_type == NOTE_TYPE_VOICE:
-            return f"{_voice_diary_date(note)}_{note.created_time_str[:4]}_语音日记.md"
+            return f"{_short_date(_voice_diary_date(note))}_{note.created_time_str[:4]}_语音日记.md"
 
         parts = [date]  # 日期前缀便于排序；ID 留在 frontmatter 中做全局去重
         if note.title:

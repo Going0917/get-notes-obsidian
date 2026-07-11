@@ -128,14 +128,21 @@ def voice_recording_datetime(note: Note) -> tuple[str, str]:
     return note.date, "0000"
 
 
+def short_date(date_str: str) -> str:
+    match = re.match(r"^20(\d{2})-(\d{2})-(\d{2})", date_str or "")
+    if not match:
+        return date_str or "unknown"
+    return f"{match.group(1)}.{match.group(2)}.{match.group(3)}"
+
+
 def target_filename(note: Note) -> str:
     if note.type == "voice":
         diary_date, hhmm = voice_recording_datetime(note)
-        return f"{diary_date}_{hhmm}_语音日记.md"
+        return f"{short_date(diary_date)}_{hhmm}_语音日记.md"
     title = sanitize(note.title)
     if note.date == "unknown" and title.startswith("unknown_"):
         return f"{title}.md"
-    return f"{note.date}_{title}.md"
+    return f"{short_date(note.date)}_{title}.md"
 
 
 def classify_english(note: Note) -> str | None:
