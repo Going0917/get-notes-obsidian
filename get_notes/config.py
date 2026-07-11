@@ -38,7 +38,7 @@ class Config:
             raise ValueError(
                 "❌ 未设置 OBSIDIAN_VAULT_PATH\n"
                 "请在 .env 文件中添加：\n"
-                "OBSIDIAN_VAULT_PATH=/你的/Obsidian Vault/Get笔记沉淀"
+                "OBSIDIAN_VAULT_PATH=/你的/Going Knowledge/Get笔记沉淀"
             )
         return self
 

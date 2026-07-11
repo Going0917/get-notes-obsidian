@@ -11,6 +11,9 @@
 # 增量同步状态
 .sync_state.json
 
+# 本地清理报告（包含私人笔记标题，不入 git）
+cleanup_reports/
+
 # Python 缓存
 __pycache__/
 *.pyc

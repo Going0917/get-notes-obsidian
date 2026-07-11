@@ -47,6 +47,9 @@ _WORK_PROJECT_KEYWORDS = ["答辩", "OKR", "年度规划", "项目复盘", "复�
 # 主题关键词路由规则（按优先级顺序检查，第一个匹配的生效）
 # 注意：旅行路由已移至 _TRAVEL_REGIONS 字典，由 _get_topic_path() 优先处理
 _TOPIC_RULES = [
+    # 财商投资（放在 AI 之前，避免 "AI链接笔记" 这类通用标签盖过主题）
+    (["财富", "投资", "理财", "FIRE", "纳瓦尔", "复利", "财商",
+      "资产", "股东信", "巴菲特", "被动收入"],                   "03_财商投资"),
     # AI 与技术
     (["AI", "人工智能", "大模型", "LLM", "Claude", "GPT", "Kimi",
       "技术", "工程", "编程", "提示词", "Obsidian知识管理"],         "01_AI与科技"),
@@ -59,9 +62,8 @@ _TOPIC_RULES = [
     (["跑步", "马拉松", "健身", "训练", "装备", "运动", "健康"],      "06_生活/运动健康"),
     # 生活 — 消费选品
     (["选品", "好物", "选购", "音箱", "消费"],                        "06_生活/消费选品"),
-    # 生活（兜底，含财富/投资/极简等）
-    (["财富", "投资", "理财", "纳瓦尔", "复利", "财商",
-      "极简", "生活", "旅居", "保健品", "健康品"],                   "06_生活"),
+    # 生活兜底
+    (["极简", "生活", "旅居", "保健品", "健康品"],                   "06_生活"),
 ]
 
 
@@ -187,17 +189,8 @@ class ObsidianRenderer:
         # 目录不存在则创建
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # 语音备忘：同一天有多条时加 _2 _3 后缀（避免覆盖）
-        if note.note_type == NOTE_TYPE_VOICE:
-            stem = output_path.stem
-            for i in range(2, 99):
-                if not output_path.exists():
-                    break
-                output_path = output_path.parent / f"{stem}_{i}.md"
-
-        # 其他类型：已存在则跳过（防重保险）
-        elif output_path.exists():
-            return output_path, False, "existing-path"
+        # ID 去重已经在 find_existing_path() 完成；这里仅处理不同笔记撞名。
+        output_path = _unique_path(output_path)
 
         content = self.render(note)
         with open(output_path, "w", encoding="utf-8") as f:
@@ -560,16 +553,17 @@ class ObsidianRenderer:
         生成安全的文件名（不含非法字符，长度合理）
 
         格式：
-        - 播客/文章/读书/工作：{date}_get-{id}_{来源}_{标题}.md
-        - 语音备忘：{diary_date}_get-{id}_语音备忘.md（凌晨录音归前一天）
+        - 播客/文章/读书/工作：{date}_{来源}_{标题}.md
+        - 语音备忘：{diary_date}_语音备忘.md（凌晨录音归前一天）
+
+        Get 笔记 ID 只保存在 frontmatter 中，用于机器去重，不暴露在文件名里。
         """
         date = note.created_date  # 2026-03-15
-        note_id = _sanitize(f"get-{note.id}", max_len=32)
 
         if note.note_type == NOTE_TYPE_VOICE:
-            return f"{_voice_diary_date(note)}_{note_id}_语音备忘.md"
+            return f"{_voice_diary_date(note)}_语音备忘.md"
 
-        parts = [date, note_id]  # 日期前缀便于排序，ID 保证跨版本稳定
+        parts = [date]  # 日期前缀便于排序；ID 留在 frontmatter 中做全局去重
         if note.source_name:
             parts.append(_sanitize(note.source_name, max_len=20))
         if note.title:
@@ -613,6 +607,19 @@ def _sanitize(text: str, max_len: int = 50) -> str:
     # 压缩多余空白
     text = re.sub(r"\s+", " ", text).strip()
     return text[:max_len]
+
+
+def _unique_path(path: Path) -> Path:
+    """Return a non-existing sibling path by appending _2, _3 ... when needed."""
+    if not path.exists():
+        return path
+    stem = path.stem
+    suffix = path.suffix
+    for i in range(2, 1000):
+        candidate = path.parent / f"{stem}_{i}{suffix}"
+        if not candidate.exists():
+            return candidate
+    raise RuntimeError(f"无法为文件生成唯一名称：{path}")
 
 
 def _frontmatter_id(note: ParsedNote) -> str:

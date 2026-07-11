@@ -1,6 +1,6 @@
 # Get 笔记 → Obsidian 同步工具
 
-> 将 [Get 笔记](https://www.biji.com/)（罗辑思维旗下 AI 笔记应用）的内容自动同步到 Obsidian Vault，按笔记类型分类保存为标准 Markdown 文件。
+> 将 [Get 笔记](https://www.biji.com/)（罗辑思维旗下 AI 笔记应用）的内容自动同步到 Obsidian Vault，按主题分类保存为标准 Markdown 文件。
 
 ---
 
@@ -17,29 +17,33 @@
   - 📄 `其他笔记` — 无法识别类型时的兜底分类
 - **结构化输出**：每篇笔记包含 YAML frontmatter、AI 总结、章节、金句、转写原文
 - **智能 Token 管理**：首次登录后自动刷新，约 90 天内无需重新登录
-- **防重复保护**：写入前检查目标文件是否已存在
+- **全局防重复保护**：写入前扫描整个 `Get笔记沉淀` 目录中的 `id: get-...`，避免目录规则变化后重复写入
+- **干净文件名**：新增笔记使用 `日期_标题.md`，Get ID 只保存在 frontmatter 中，不污染 Obsidian 文件列表
 
 ---
 
 ## 输出目录结构
 
 ```
-Obsidian Vault/
+Going Knowledge/
 └── Get笔记沉淀/
-    ├── 播客笔记/
-    │   └── 2026-03/
-    │       └── 小宇宙_AI时代的认知革命_2026-03-15.md
-    ├── 语音备忘/
-    │   └── 2026-03/
-    │       └── 语音备忘_143521_2026-03-15.md
-    ├── 文章剪藏/
-    │   └── 2026-03/
-    │       └── 标题_2026-03-15.md
-    ├── 读书笔记/
-    │   └── 2026-03/
-    │       └── 书名_读书笔记_2026-03-15.md
-    ├── 工作笔记/
-    └── 其他笔记/
+    ├── 00_其他/
+    ├── 01_AI与科技/
+    ├── 02_职场工作/
+    │   ├── 会议记录/
+    │   └── 项目复盘/
+    ├── 03_财商投资/
+    ├── 04_自我成长/
+    ├── 05_旅行/
+    │   ├── 日本/
+    │   ├── 东南亚/
+    │   └── 国内/
+    ├── 06_生活/
+    │   ├── 消费选品/
+    │   └── 运动健康/
+    ├── 07_语音日记/
+    │   └── YYYY-MM/
+    └── 08_读书笔记/
 ```
 
 ---
@@ -56,7 +60,7 @@ Obsidian Vault/
 
 ```bash
 # 1. 克隆项目
-git clone https://github.com/YOUR_USERNAME/get-notes-obsidian.git
+git clone https://github.com/Going0917/get-notes-obsidian.git
 cd get-notes-obsidian
 
 # 2. 安装依赖
@@ -67,7 +71,7 @@ playwright install chromium
 
 # 4. 配置环境变量
 cp .env.example .env
-# 编辑 .env，填写你的 Obsidian Vault 路径
+# 编辑 .env，填写你的 Going Knowledge/Get笔记沉淀 路径
 ```
 
 ---
@@ -77,8 +81,8 @@ cp .env.example .env
 编辑 `.env` 文件：
 
 ```ini
-# 必填：Obsidian Vault 中用于存放 Get 笔记的目录
-OBSIDIAN_VAULT_PATH=/Users/your-name/Documents/Obsidian Vault/Get笔记沉淀
+# 必填：Going Knowledge 中用于存放 Get 笔记的目录
+OBSIDIAN_VAULT_PATH=/Users/your-name/Library/Mobile Documents/iCloud~md~obsidian/Documents/Going Knowledge/Get笔记沉淀
 
 # 可选：每次 API 分页大小（默认 50）
 # SYNC_LIMIT=50
@@ -132,7 +136,7 @@ python3 sync.py --limit 10
 ============================================================
 📥 Get 笔记同步工具
 ============================================================
-📂 输出目录：/Users/your-name/Documents/Obsidian Vault/Get笔记沉淀
+📂 输出目录：/Users/your-name/Library/Mobile Documents/iCloud~md~obsidian/Documents/Going Knowledge/Get笔记沉淀
 📊 历史累计同步 0 条，上次同步时间：从未同步
 🔍 开始增量拉取（上次位置：无，首次全量）
 📋 找到 12 条新笔记，开始拉取详情...
@@ -149,7 +153,7 @@ python3 sync.py --limit 10
    本次同步：12 条
    类型分布：播客×5 | 文章×4 | 语音备忘×2 | 读书笔记×1
    最新笔记：2026-03-15 ｜ AI 时代的认知革命
-   输出目录：/Users/your-name/Documents/Obsidian Vault/Get笔记沉淀
+   输出目录：/Users/your-name/Library/Mobile Documents/iCloud~md~obsidian/Documents/Going Knowledge/Get笔记沉淀
 ============================================================
 ```
 
@@ -278,7 +282,7 @@ python3 sync.py --full-sync
 
 **Q: 已同步的笔记内容有更新，能重新同步吗？**
 
-目前笔记文件一旦创建不会被覆盖（防重复设计）。如需重新同步某篇，手动删除对应的 `.md` 文件后重新运行即可。
+目前同步器会按 frontmatter 的 `id: get-...` 全局去重，已存在同 ID 文件时不会覆盖。如需重新同步某篇，先备份并移走对应 `.md` 文件，再重新运行同步。
 
 **Q: 支持 Windows 吗？**
 
