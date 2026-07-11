@@ -66,7 +66,11 @@ _WORK_TOPIC_RULES = [
 # 主题关键词路由规则（按优先级顺序检查，第一个匹配的生效）
 # 注意：旅行路由已移至 _TRAVEL_REGIONS 字典，由 _get_topic_path() 优先处理
 _FINANCE_KEYWORDS = ["财富", "投资", "理财", "FIRE", "纳瓦尔", "复利", "财商", "资产配置", "股东信", "巴菲特", "被动收入", "凯利"]
-_AI_KEYWORDS = ["AI", "人工智能", "大模型", "LLM", "Claude", "GPT", "Kimi", "技术", "工程", "编程", "提示词", "Obsidian知识管理"]
+_AI_KEYWORDS = [
+    "AI", "人工智能", "大模型", "LLM", "Claude", "GPT", "Kimi",
+    "Codex", "Agent", "飞书CLI", "技术", "工程", "编程", "提示词",
+    "Obsidian知识管理",
+]
 _ENGLISH_KEYWORDS = ["英语", "哑巴英语", "元宝App"]
 _WORK_KEYWORDS = ["客户", "业务", "电商", "广告", "投放", "腾讯", "商销", "视频号", "保健品", "营养", "开品", "会议", "复盘"]
 
@@ -118,6 +122,13 @@ def _contains_any(text: str, keywords: list[str]) -> bool:
 
 def _is_external_podcast(note: "ParsedNote") -> bool:
     return note.note_type == NOTE_TYPE_PODCAST and "xiaoyuzhoufm.com" in (note.source_url or "")
+
+
+def _is_external_platform_article(note: "ParsedNote") -> bool:
+    source_url = note.source_url or ""
+    return note.note_type == NOTE_TYPE_ARTICLE and any(
+        domain in source_url for domain in ("xhslink.com", "xiaohongshu.com", "xhs.cn")
+    )
 
 
 def _get_work_path(note: "ParsedNote", search_text: str) -> str:
@@ -177,8 +188,12 @@ def _get_topic_path(note: "ParsedNote") -> str:
     if _contains_any(search_text, _FINANCE_KEYWORDS):
         return "03_财商投资"
 
-    # 外部播客不按“职场工作”归档，除非已经被解析为 work。
-    if not _is_external_podcast(note) and _contains_any(search_text, _WORK_KEYWORDS):
+    # 外部平台内容不按“职场工作”归档，除非已经被解析为 work。
+    if (
+        not _is_external_podcast(note)
+        and not _is_external_platform_article(note)
+        and _contains_any(search_text, _WORK_KEYWORDS)
+    ):
         return _get_work_path(note, search_text)
 
     growth_path = _get_rule_path(search_text, _GROWTH_RULES)
@@ -189,7 +204,10 @@ def _get_topic_path(note: "ParsedNote") -> str:
     if life_path:
         return life_path
 
-    if _contains_any(search_text, _AI_KEYWORDS):
+    ai_search_text = search_text
+    if _is_external_platform_article(note):
+        ai_search_text = " ".join([note.title or "", note.source_name or ""])
+    if _contains_any(ai_search_text, _AI_KEYWORDS):
         return "01_AI与科技"
 
     return "06_生活"  # 兜底

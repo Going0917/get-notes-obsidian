@@ -246,25 +246,30 @@ def detect_note_type(
             if domain in src_url_lower:
                 return NOTE_TYPE_PODCAST
 
-        # 3b. 工作笔记识别：tags 或 title 含工作关键词
+        # 3b. 外部平台文章优先归为文章，避免因标题含工作关键词误入职场。
+        for domain in _XIAOHONGSHU_URL_DOMAINS:
+            if domain in src_url_lower:
+                return NOTE_TYPE_ARTICLE
+
+        # 3c. 工作笔记识别：tags 或 title 含工作关键词
         if tags_lower & _WORK_TAGS:
             return NOTE_TYPE_WORK
         if any(kw in title_lower for kw in _WORK_TAGS):
             return NOTE_TYPE_WORK
 
-        # 3c. 读书笔记识别（img_text 为主）
+        # 3d. 读书笔记识别（img_text 为主）
         if api_note_type == "img_text":
             if tags_lower & _BOOK_TAGS:
                 return NOTE_TYPE_BOOK
             if "读书" in title_lower or "阅读" in title_lower:
                 return NOTE_TYPE_BOOK
 
-        # 3d. 来源名称匹配播客关键词（宽松匹配）
+        # 3e. 来源名称匹配播客关键词（宽松匹配）
         for keyword in _PODCAST_PLATFORMS:
             if keyword.lower() in src_name_lower or keyword.lower() in src_url_lower:
                 return NOTE_TYPE_PODCAST
 
-        # 3e. 默认为文章
+        # 3f. 默认为文章
         return NOTE_TYPE_ARTICLE
 
     return NOTE_TYPE_UNKNOWN

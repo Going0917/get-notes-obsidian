@@ -99,6 +99,11 @@ def contains(text: str, keywords: list[str]) -> bool:
     return any(keyword in text for keyword in keywords)
 
 
+def is_external_platform_article(note: Note) -> bool:
+    source_url = note.source_url
+    return any(domain in source_url for domain in ("xhslink.com", "xiaohongshu.com", "xhs.cn"))
+
+
 def sanitize(name: str, max_len: int = 80) -> str:
     name = re.sub(r'[/\\:*?"<>|]', "", name)
     name = re.sub(r"[\x00-\x1f\x7f]", "", name)
@@ -217,6 +222,11 @@ def target_dir(note: Note) -> str:
         result = classifier(note)
         if result:
             return result
+
+    if is_external_platform_article(note):
+        if contains(note.title, ["AI", "Codex", "Agent", "工具", "技术", "工程", "编程"]):
+            return "01_AI与科技"
+        return note.path.parent.relative_to(note.root).as_posix()
 
     # Work is prioritized for current work notes and obvious business/customer material.
     work_result = classify_work(note)
