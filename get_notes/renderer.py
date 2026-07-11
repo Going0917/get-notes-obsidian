@@ -121,8 +121,9 @@ def _is_external_podcast(note: "ParsedNote") -> bool:
 
 
 def _get_work_path(note: "ParsedNote", search_text: str) -> str:
+    brand_search_text = " ".join([search_text, note.summary or "", note.body_text or ""])
     for brand, keywords in _WORK_BRAND_RULES:
-        if _contains_any(search_text, keywords):
+        if _contains_any(brand_search_text, keywords):
             return f"02_职场工作/01_客户沟通复盘/{brand}"
 
     for suffix, keywords in _WORK_TOPIC_RULES:
@@ -395,20 +396,10 @@ class ObsidianRenderer:
             "---",
         ]
 
-        # 语音备忘：AI 整理内容优先展示，原始转写附在后面（两者独立，不互斥）
-        if note.body_text:
-            lines += ["", "## 📝 笔记内容", "", note.body_text, ""]
-
-        if note.transcript:
-            lines += ["", "## 🎙 录音原文", "", note.transcript, ""]
-
-        if note.summary:
-            lines += ["", "## 📝 AI 整理", "", note.summary, ""]
-
-        if note.quotes:
-            lines += ["", "## 💬 重点摘录", ""]
-            for q in note.quotes:
-                lines += [f"> {q}", ""]
+        # 语音日记只保留整理后的笔记内容；不输出原始录音转写、摘要或摘录。
+        note_content = note.body_text or note.summary
+        if note_content:
+            lines += ["", "## 📝 笔记内容", "", note_content, ""]
 
         return "\n".join(lines)
 
@@ -568,6 +559,7 @@ class ObsidianRenderer:
         if note.body_text:
             lines += ["", "## 📄 完整内容", "", note.body_text, ""]
 
+        # 工作笔记需要保留会议原文，便于回看真实对话细节。
         if note.transcript:
             lines += ["", "## 🎙 原文转写", "", note.transcript, ""]
 

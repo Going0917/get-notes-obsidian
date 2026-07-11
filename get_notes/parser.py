@@ -210,6 +210,7 @@ def detect_note_type(
 
     Get笔记真实 note_type 值：
     - "local_audio"  → 本地上传音频（播客录音等） → podcast
+    - "meeting"      → 会议转写                    → work
     - "audio"        → 录音/语音备忘              → voice
     - "link"         → 链接/文章剪藏              → podcast/article/work
     - "img_text"     → 图文笔记                   → book/article/work
@@ -222,7 +223,11 @@ def detect_note_type(
     src_name_lower = (src_name or "").lower()
     title_lower    = (raw.get("title") or "").lower()
 
-    # 1. 本地上传音频 → 优先检查工作关键词，否则归入播客
+    # 1. 会议转写 → 工作笔记
+    if api_note_type == "meeting":
+        return NOTE_TYPE_WORK
+
+    # 2. 本地上传音频 → 优先检查工作关键词，否则归入播客
     if api_note_type == "local_audio":
         if tags_lower & _WORK_TAGS:
             return NOTE_TYPE_WORK
@@ -230,11 +235,11 @@ def detect_note_type(
             return NOTE_TYPE_WORK
         return NOTE_TYPE_PODCAST
 
-    # 2. 录音 → 语音备忘
+    # 3. 录音 → 语音备忘
     if api_note_type == "audio":
         return NOTE_TYPE_VOICE
 
-    # 3. 链接笔记 / 图文笔记 — 按优先级判断
+    # 4. 链接笔记 / 图文笔记 — 按优先级判断
     if api_note_type in ("link", "img_text", ""):
         # 3a. URL 域名匹配播客平台（最高优先级，精确）
         for domain in _PODCAST_URL_DOMAINS:

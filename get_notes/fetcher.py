@@ -139,13 +139,13 @@ class GetNotesFetcher:
         # 触发条件（满足任一即拉取）：
         #   1. 有 audio_url —— 本地上传音频
         #   2. raw_status == "done" —— 平台确认转写完成
-        #   3. note_type 为音频/链接类 —— 播客外链（小宇宙等）、语音备忘
+        #   3. note_type 为音频/链接/会议类 —— 播客外链（小宇宙等）、语音备忘、工作会议
         #      link 类型的外链播客没有 audio_url，但 /original 接口仍有完整转写
         note_type = (note.get("note_type") or "").lower()
         should_fetch_original = (
             note.get("audio_url")
             or note.get("raw_status") == "done"
-            or note_type in ("audio", "local_audio", "link")
+            or note_type in ("audio", "local_audio", "link", "meeting")
         )
         if should_fetch_original:
             try:
